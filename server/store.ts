@@ -13,6 +13,8 @@ export interface MemoryStore {
   addPost(post: Post): void
   /** 幂等切换点赞状态；id 不存在时返回 null */
   setLiked(id: string, liked: boolean): Post | null
+  /** 幂等切换收藏状态；id 不存在时返回 null */
+  setFavorited(id: string, favorited: boolean): Post | null
   removePost(id: string): boolean
   /** 同时更新昵称与所有历史内容的作者 */
   renameAuthor(name: string): void
@@ -59,6 +61,23 @@ export function createMemoryStore(seed: MemoryStoreSeed = {}): MemoryStore {
         ...current,
         liked,
         likes: liked ? current.likes + 1 : Math.max(0, current.likes - 1),
+      }
+      posts.set(id, next)
+      return copyPost(next)
+    },
+
+    setFavorited(id, favorited) {
+      const current = posts.get(id)
+      if (!current) return null
+
+      if (current.favorited === favorited) return copyPost(current)
+
+      const next: Post = {
+        ...current,
+        favorited,
+        favorites: favorited
+          ? current.favorites + 1
+          : Math.max(0, current.favorites - 1),
       }
       posts.set(id, next)
       return copyPost(next)
