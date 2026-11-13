@@ -28,12 +28,13 @@
 - **发布内容**：纯文本，最多 200 字，输入时实时显示字数；为空或超限时发布按钮不可用并给出提示，支持 `Ctrl / Cmd + Enter` 快捷发布；发布中按钮进入禁用态
 - **浏览信息流**：内容按发布时间倒序展示为卡片，包含渐变首字母头像、昵称、相对时间（刚刚 / x 分钟前 / x 小时前 / 昨天 / 前天 / 具体日期）与正文，正文保留换行；页面停留时相对时间每 30 秒自动刷新
 - **点赞**：点赞 / 取消点赞，带选中态与弹跳动效，计数与状态由服务端保存，刷新后保留
+- **收藏**：收藏 / 取消收藏（书签按钮），带琥珀色选中态与弹跳动效；信息流可按「全部 / 收藏」筛选，收藏空态给出引导文案；提示「已收藏 / 已取消收藏」，状态与计数由服务端保存，刷新后保留
 - **删除**：删除前二次确认，卡片以过渡动画移除
 - **昵称**：默认「访客」，点击右上角昵称按钮修改后，服务端会同步更新全部历史内容的作者名，页面顶部与信息流一起刷新；弹窗内支持焦点循环、`Esc` 关闭与焦点还原
 - **服务端存储**：内容、点赞状态、昵称都保存在后端进程内存中，多个浏览器/标签页看到同一份数据
 - **失败提示**：后端不可用、接口返回错误或数据格式异常时，界面给出可读提示且不崩溃；首次加载展示加载态而不是「还没有内容」
 - **空状态与响应式**：无内容时展示引导文案；桌面单列居中，移动端自适应全宽
-- **可访问性**：语义化标签、可见焦点环、`aria-live` 提示、`aria-pressed` 点赞语义、`prefers-reduced-motion` 降级
+- **可访问性**：语义化标签、可见焦点环、`aria-live` 提示、`aria-pressed` 点赞 / 收藏 / 筛选语义、`prefers-reduced-motion` 降级
 
 ## 后端 API
 
@@ -66,6 +67,11 @@ curl -X PATCH http://localhost:8787/api/posts/<id> \
   -H 'content-type: application/json' \
   -d '{"liked":true}'
 
+# 收藏（可与 liked 同时提交，也只接受布尔值）
+curl -X PATCH http://localhost:8787/api/posts/<id> \
+  -H 'content-type: application/json' \
+  -d '{"favorited":true}'
+
 # 修改昵称（会同步历史内容作者）
 curl -X PUT http://localhost:8787/api/profile \
   -H 'content-type: application/json' \
@@ -80,6 +86,7 @@ import { api } from './lib/api'
 const posts = await api.listPosts()
 const created = await api.createPost({ content: '你好', author: '访客' })
 await api.setLike(created.id, true)
+await api.setFavorite(created.id, true)
 await api.deletePost(created.id)
 ```
 
@@ -92,7 +99,7 @@ await api.deletePost(created.id)
 | `code` | HTTP | 触发条件 |
 | --- | --- | --- |
 | `invalid_content` | 400 | 内容为空或超过 200 字 |
-| `invalid_body` | 400 | body 字段类型不对（如 `liked` 不是布尔） |
+| `invalid_body` | 400 | body 字段类型不对（如 `liked` / `favorited` 不是布尔），或 `PATCH` 未提供任何可更新字段 |
 | `invalid_json` | 400 | 请求体不是合法 JSON |
 | `invalid_name` | 400 | 昵称为空或超长 |
 | `not_found` | 404 | 内容不存在，或未匹配的 `/api/*` 路由（非 `/api` 的未知路径在有 `dist/` 时回退 `index.html`，不是 JSON 404） |
@@ -157,11 +164,11 @@ npm run typecheck   # 仅做类型检查
 | --- | --- | --- |
 | 1 | `server/*.spec.ts` | REST 契约（状态码、错误码、`Location` 头、CORS）与内存存储不变量；node 环境运行 |
 | 2 | `src/lib/*.spec.ts` | 字数统计（emoji 按字素簇计 1 个）、相对时间、API 客户端（错误映射、204、非法 JSON）、内容与昵称规则 |
-| 3 | `src/stores/*.spec.ts` | Pinia store 的异步读写、排序、点赞计数不变量、接口失败时的降级、轻提示计时 |
-| 4 | `src/components/*.spec.ts` | 组件黑盒行为：按角色/`data-testid` 查询，模拟用户输入与点击，断言渲染结果与 `emits` |
+| 3 | `src/stores/*.spec.ts` | Pinia store 的异步读写、排序、点赞 / 收藏计数不变量、接口失败时的降级、轻提示计时 |
+| 4 | `src/components/*.spec.ts` | 组件黑盒行为：按角色/`data-testid` 查询，模拟用户输入与点击，断言渲染结果与 `emits`（含收藏筛选） |
 | 5 | `src/App.spec.ts` | 集成：用真实 Hono app（`src/test-utils/fakeApi.ts` 拦截 `fetch`）跑通发布 / 点赞 / 删除 / 改名 / 加载失败 |
 
-当前共 **200 个测试用例**（17 个测试文件，`npx vitest run` 实测全部通过）。测试环境默认 happy-dom，`server/*.spec.ts` 通过 `// @vitest-environment node` 切到 node 环境；`src/test-utils/fakeApi.ts` 用真实 Hono app 接管 `fetch`，用例内不需要起真实端口。
+当前共 **224 个测试用例**（17 个测试文件，`npx vitest run` 实测全部通过）。测试环境默认 happy-dom，`server/*.spec.ts` 通过 `// @vitest-environment node` 切到 node 环境；`src/test-utils/fakeApi.ts` 用真实 Hono app 接管 `fetch`，用例内不需要起真实端口。
 
 ## 目录结构
 
@@ -209,7 +216,7 @@ npm run typecheck   # 仅做类型检查
 
 - **前端只通过一个入口访问数据**：组件与 store 都不直接 `fetch`，全部经由 `src/lib/api.ts` 的 `createApiClient()`；默认实例 `api` 以同源相对路径请求 `/api/...`，开发时由 Vite 代理转发，生产时由 Hono 服务同源提供
 - **服务端是唯一数据源**：`posts` / `user` store 只是服务端数据的镜像，写操作（发布、点赞、删除、改名）以接口返回值为准；id、`createdAt`、作者归一化、字数校验都在服务端完成
-- **数据流**：`props` 向下、`emits` 向上。`PostCard` 只负责展示并抛出 `like` / `delete`，由 `App.vue` 决定确认、删除与提示
+- **数据流**：`props` 向下、`emits` 向上。`PostCard` 只负责展示并抛出 `like` / `favorite` / `delete`，由 `App.vue` 决定确认、删除与提示；「全部 / 收藏」筛选是 `PostFeed` 的纯展示状态，不改动传入的 `posts`
 - **跨功能协调放在装配层**：修改昵称会同时影响 `user` 与全部历史内容的作者名，这段编排写在 `App.vue`，两个 store 之间不互相依赖
 - **领域逻辑与框架解耦**：`src/lib` 基本都是纯函数，字符规则与时间格式可以脱离 Vue 单独测试；服务端复用同一份 `src/lib/post.ts`、`src/lib/profile.ts` 规则，前后端校验不会漂移
 - **错误处理与降级**：store 的异步方法不抛异常，失败时写入 `error` 并返回失败值，由装配层弹出可读提示；`ApiError` 保留 `status` / `code`，`status === 0` 表示请求没到达服务端；删除时若服务端返回 404 视为「已被删除」并清理本地列表
@@ -228,6 +235,8 @@ interface Post {
   content: string;   // 正文（纯文本，最多 200 字）
   likes: number;     // 点赞数
   liked: boolean;    // 当前是否已点赞
+  favorites: number; // 收藏数
+  favorited: boolean;// 当前是否已收藏
   createdAt: number; // 创建时间戳（毫秒）
 }
 ```
@@ -254,5 +263,3 @@ interface Post {
 本项目为原创界面、文案与代码实现，与任何第三方社交产品的界面、标识及品牌元素无关。
 
 ## 许可证
-
-暂未指定许可证。
