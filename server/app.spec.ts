@@ -236,6 +236,119 @@ describe('PATCH /api/posts/:id', () => {
     expect((await res.json()).error.code).toBe('invalid_body')
   })
 
+  it('favorited: true 时 favorites + 1 并置 favorited 为 true', async () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'p1' })] })
+    const app = createApp({ store })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: true }))
+
+    expect(res.status).toBe(200)
+    const { post } = await res.json()
+    expect(post).toMatchObject({ id: 'p1', favorited: true, favorites: 1 })
+    expect(store.findPost('p1')).toMatchObject({ favorited: true, favorites: 1 })
+  })
+
+  it('重复 favorited: true 幂等，favorites 不变', async () => {
+    const app = createApp({
+      store: createMemoryStore({
+        posts: [makePost({ id: 'p1', favorites: 1, favorited: true })],
+      }),
+    })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: true }))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).post).toMatchObject({ favorited: true, favorites: 1 })
+  })
+
+  it('favorited: false 时 favorites - 1 且不小于 0', async () => {
+    const app = createApp({
+      store: createMemoryStore({
+        posts: [makePost({ id: 'p1', favorites: 1, favorited: true })],
+      }),
+    })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: false }))
+    expect((await res.json()).post).toMatchObject({ favorited: false, favorites: 0 })
+
+    const again = await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: false }))
+    expect((await again.json()).post).toMatchObject({ favorited: false, favorites: 0 })
+  })
+
+  it('liked 与 favorited 同时提供时一并生效', async () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'p1', likes: 2 })] })
+    const app = createApp({ store })
+
+    const res = await app.request(
+      '/api/posts/p1',
+      jsonInit('PATCH', { liked: true, favorited: true }),
+    )
+
+    expect(res.status).toBe(200)
+    const { post } = await res.json()
+    expect(post).toMatchObject({ id: 'p1', likes: 3, liked: true, favorites: 1, favorited: true })
+    expect(store.findPost('p1')).toMatchObject({
+      likes: 3,
+      liked: true,
+      favorites: 1,
+      favorited: true,
+    })
+  })
+
+  it('favorited 不是布尔值返回 400 invalid_body', async () => {
+    const app = createApp({ store: createMemoryStore({ posts: [makePost({ id: 'p1' })] }) })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: 'yes' }))
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('invalid_body')
+    expect(body.error.message).toBe('liked 与 favorited 必须是布尔值')
+  })
+
+  it('任一字段不是布尔值返回 400 invalid_body，且不写入任何状态', async () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'p1' })] })
+    const app = createApp({ store })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', { liked: true, favorited: 'yes' }))
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('invalid_body')
+    expect(store.findPost('p1')).toMatchObject({ likes: 0, liked: false })
+  })
+
+  it('body 同时缺少 liked 与 favorited 返回 400 invalid_body', async () => {
+    const app = createApp({ store: createMemoryStore({ posts: [makePost({ id: 'p1' })] }) })
+
+    const res = await app.request('/api/posts/p1', jsonInit('PATCH', {}))
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('invalid_body')
+    expect(body.error.message).toBe('liked 或 favorited 至少需要一个布尔值')
+  })
+
+  it('favorited 相关的 id 不存在返回 404 not_found', async () => {
+    const app = createApp({ store: createMemoryStore() })
+
+    const res = await app.request('/api/posts/missing', jsonInit('PATCH', { favorited: true }))
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('not_found')
+  })
+
+  it('收藏状态会持久化到 GET /api/posts', async () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'p1' })] })
+    const app = createApp({ store })
+
+    await app.request('/api/posts/p1', jsonInit('PATCH', { favorited: true }))
+
+    const res = await app.request('/api/posts')
+    const { posts } = await res.json()
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatchObject({ id: 'p1', favorited: true, favorites: 1 })
+  })
+
   it('body 不是合法 JSON 返回 400 invalid_json', async () => {
     const app = createApp({ store: createMemoryStore({ posts: [makePost({ id: 'p1' })] }) })
 

@@ -172,6 +172,98 @@ describe('setLiked', () => {
   })
 })
 
+describe('setFavorited', () => {
+  it('收藏时 favorites + 1 并置 favorited 为 true', () => {
+    const store = createMemoryStore({
+      posts: [makePost({ id: 'a', favorites: 2, favorited: false })],
+    })
+
+    const updated = store.setFavorited('a', true)
+
+    expect(updated).toEqual(makePost({ id: 'a', favorites: 3, favorited: true }))
+    expect(store.findPost('a')?.favorites).toBe(3)
+  })
+
+  it('重复收藏是幂等的：favorites 不再增加', () => {
+    const store = createMemoryStore({
+      posts: [makePost({ id: 'a', favorites: 3, favorited: true })],
+    })
+
+    store.setFavorited('a', true)
+    const again = store.setFavorited('a', true)
+
+    expect(again?.favorites).toBe(3)
+    expect(store.findPost('a')?.favorites).toBe(3)
+  })
+
+  it('取消收藏时 favorites - 1 并置 favorited 为 false', () => {
+    const store = createMemoryStore({
+      posts: [makePost({ id: 'a', favorites: 3, favorited: true })],
+    })
+
+    const updated = store.setFavorited('a', false)
+
+    expect(updated).toEqual(makePost({ id: 'a', favorites: 2, favorited: false }))
+  })
+
+  it('重复取消收藏是幂等的：favorites 不再减少', () => {
+    const store = createMemoryStore({
+      posts: [makePost({ id: 'a', favorites: 2, favorited: false })],
+    })
+
+    store.setFavorited('a', false)
+    const again = store.setFavorited('a', false)
+
+    expect(again?.favorites).toBe(2)
+  })
+
+  it('favorites 不会被减成负数', () => {
+    const store = createMemoryStore({
+      posts: [makePost({ id: 'a', favorites: 1, favorited: true })],
+    })
+
+    store.setFavorited('a', false)
+    const updated = store.setFavorited('a', false)
+
+    expect(updated?.favorites).toBe(0)
+    expect(updated?.favorited).toBe(false)
+  })
+
+  it('不影响点赞相关字段', () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'a', likes: 5, liked: true })] })
+
+    store.setFavorited('a', true)
+
+    expect(store.findPost('a')).toEqual(makePost({ id: 'a', likes: 5, liked: true, favorites: 1, favorited: true }))
+  })
+
+  it('返回副本：调用方改动返回值不影响内部数据', () => {
+    const store = createMemoryStore({ posts: [makePost({ id: 'a' })] })
+
+    const updated = store.setFavorited('a', true)
+    if (!updated) throw new Error('应当找到内容')
+    updated.favorites = 99
+
+    expect(store.findPost('a')?.favorites).toBe(1)
+  })
+
+  it('id 不存在时返回 null', () => {
+    const store = createMemoryStore()
+
+    expect(store.setFavorited('missing', true)).toBeNull()
+  })
+
+  it('多个实例之间的收藏状态互不影响', () => {
+    const first = createMemoryStore({ posts: [makePost({ id: 'a' })] })
+    const second = createMemoryStore({ posts: [makePost({ id: 'a' })] })
+
+    first.setFavorited('a', true)
+
+    expect(first.findPost('a')).toMatchObject({ favorited: true, favorites: 1 })
+    expect(second.findPost('a')).toMatchObject({ favorited: false, favorites: 0 })
+  })
+})
+
 describe('removePost', () => {
   it('删除成功返回 true 且列表不再包含', () => {
     const store = createMemoryStore({ posts: [makePost({ id: 'a' })] })

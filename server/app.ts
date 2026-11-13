@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Context } from 'hono'
 import { cors } from 'hono/cors'
 import { MAX_CONTENT_LENGTH, createPost } from '../src/lib/post'
+import type { Post } from '../src/lib/post'
 import { inspectName } from '../src/lib/profile'
 import { createMemoryStore } from './store'
 import type { MemoryStore } from './store'
@@ -83,12 +84,27 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     const parsed = await readJsonBody(c)
     if (!parsed.ok) return c.json(errorBody('invalid_json', INVALID_JSON_MESSAGE), 400)
 
-    const { liked } = asRecord(parsed.value)
-    if (typeof liked !== 'boolean') {
-      return c.json(errorBody('invalid_body', 'liked 必须是布尔值'), 400)
+    const body = asRecord(parsed.value)
+    const hasLiked = Object.prototype.hasOwnProperty.call(body, 'liked')
+    const hasFavorited = Object.prototype.hasOwnProperty.call(body, 'favorited')
+
+    if (!hasLiked && !hasFavorited) {
+      return c.json(errorBody('invalid_body', 'liked 或 favorited 至少需要一个布尔值'), 400)
     }
 
-    const post = store.setLiked(c.req.param('id'), liked)
+    const { liked, favorited } = body
+    if (
+      (hasLiked && typeof liked !== 'boolean') ||
+      (hasFavorited && typeof favorited !== 'boolean')
+    ) {
+      return c.json(errorBody('invalid_body', 'liked 与 favorited 必须是布尔值'), 400)
+    }
+
+    const id = c.req.param('id')
+    let post: Post | null = null
+    if (hasLiked) post = store.setLiked(id, liked as boolean)
+    if (hasFavorited) post = store.setFavorited(id, favorited as boolean)
+
     if (!post) return c.json(errorBody('not_found', '内容不存在或已被删除'), 404)
 
     return c.json({ post })
