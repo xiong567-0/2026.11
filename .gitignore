@@ -90,3 +90,8 @@ vendor/
 compile_commands.json
 CMakeCache.txt
 cmake-build-*/
+
+# ===== CodeBuddy / Agent 工具产物 =====
+.codebuddy/
+.agents/
+skills-lock.json
