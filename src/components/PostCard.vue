@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   like: [id: string]
+  favorite: [id: string]
   delete: [id: string]
 }>()
 
@@ -20,6 +21,7 @@ const relativeTime = computed(() => formatRelativeTime(props.post.createdAt, pro
 const fullTime = computed(() => formatFullTime(props.post.createdAt))
 const isoTime = computed(() => new Date(props.post.createdAt).toISOString())
 const likeLabel = computed(() => (props.post.liked ? '取消点赞' : '点赞'))
+const favoriteLabel = computed(() => (props.post.favorited ? '取消收藏' : '收藏'))
 </script>
 
 <template>
@@ -35,6 +37,34 @@ const likeLabel = computed(() => (props.post.liked ? '取消点赞' : '点赞'))
       <p class="post-content" data-testid="post-content">{{ post.content }}</p>
 
       <footer class="post-actions">
+        <button
+          type="button"
+          class="action action-favorite"
+          data-testid="post-favorite"
+          :class="{ 'is-favorited': post.favorited }"
+          :aria-pressed="post.favorited ? 'true' : 'false'"
+          :aria-label="favoriteLabel"
+          @click="emit('favorite', post.id)"
+        >
+          <svg
+            class="icon-bookmark"
+            viewBox="0 0 20 20"
+            width="15"
+            height="15"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            aria-hidden="true"
+          >
+            <path
+              d="M5.6 3.4h8.8a1 1 0 0 1 1 1v12.1l-5.4-3.6-5.4 3.6V4.4a1 1 0 0 1 1-1Z"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span class="favorite-count" data-testid="favorite-count">{{ post.favorites }}</span>
+        </button>
+
         <button
           type="button"
           class="action action-like"
@@ -173,6 +203,32 @@ const likeLabel = computed(() => (props.post.liked ? '取消点赞' : '点赞'))
   fill: currentColor;
   stroke: currentColor;
   animation: heart-pop 320ms var(--ease);
+}
+
+.action-favorite:hover {
+  color: var(--c-favorite);
+}
+
+.action-favorite.is-favorited {
+  color: var(--c-favorite);
+}
+
+.action-favorite.is-favorited .icon-bookmark {
+  fill: currentColor;
+  stroke: currentColor;
+  animation: bookmark-pop 320ms var(--ease);
+}
+
+@keyframes bookmark-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.28);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .action-delete:hover {

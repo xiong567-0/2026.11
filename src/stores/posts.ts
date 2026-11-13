@@ -72,6 +72,25 @@ export const usePostsStore = defineStore('posts', () => {
     }
   }
 
+  /** 收藏/取消收藏：与点赞对称，成功后用服务端返回值替换本地项。 */
+  async function toggleFavorite(id: string): Promise<boolean> {
+    const current = posts.value.find((post) => post.id === id)
+    if (!current) return false
+
+    loading.value = true
+    try {
+      const updated = await api.setFavorite(id, !current.favorited)
+      posts.value = posts.value.map((post) => (post.id === id ? updated : post))
+      error.value = null
+      return true
+    } catch (err) {
+      error.value = messageOf(err, '收藏失败')
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
   /** 删除内容；服务端返回 404 说明已被删除，视为成功。 */
   async function remove(id: string): Promise<boolean> {
     loading.value = true
@@ -94,5 +113,5 @@ export const usePostsStore = defineStore('posts', () => {
     }
   }
 
-  return { posts, count, loading, error, load, add, toggleLike, remove }
+  return { posts, count, loading, error, load, add, toggleLike, toggleFavorite, remove }
 })

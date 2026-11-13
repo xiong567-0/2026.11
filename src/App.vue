@@ -50,6 +50,17 @@ async function likePost(id: string): Promise<void> {
   if (!(await posts.toggleLike(id))) toast.notify(posts.error ?? '点赞失败，请重试')
 }
 
+async function favoritePost(id: string): Promise<void> {
+  if (!(await posts.toggleFavorite(id))) {
+    toast.notify(posts.error ?? '收藏失败，请重试')
+    return
+  }
+
+  // 提示语取决于操作后的服务端状态
+  const favorited = posts.posts.find((post) => post.id === id)?.favorited
+  toast.notify(favorited ? '已收藏' : '已取消收藏')
+}
+
 function openNickname(): void {
   nicknameOpen.value = true
 }
@@ -95,6 +106,7 @@ async function rename(name: string): Promise<void> {
       :posts="posts.posts"
       :loading="posts.loading"
       @like="likePost"
+      @favorite="favoritePost"
       @delete="deletePost"
     />
   </main>

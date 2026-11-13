@@ -194,6 +194,110 @@ describe('点赞与删除', () => {
   })
 })
 
+describe('收藏', () => {
+  interface FavoriteBackend {
+    posts: Post[]
+    name: string
+    failPatch: boolean
+    patchBodies: unknown[]
+  }
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  /**
+   * 收藏相关用例使用独立的内存后端：服务端 PATCH 的收藏支持由另一条分支实现，
+   * 这里按固定契约 `{ post: { favorites, favorited } }` 断言前端行为。
+   */
+  function stubFavoriteBackend(seed: Post[], name = '访客'): FavoriteBackend {
+    const state: FavoriteBackend = {
+      posts: seed.map((post) => ({ ...post })),
+      name,
+      failPatch: false,
+      patchBodies: [],
+    }
+
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const method = init?.method ?? 'GET'
+
+      if (method === 'GET' && url.endsWith('/api/posts')) return jsonResponse({ posts: state.posts })
+      if (method === 'GET' && url.endsWith('/api/profile')) return jsonResponse({ name: state.name })
+
+      if (method === 'PATCH') {
+        const body = JSON.parse(String(init?.body)) as { favorited?: boolean }
+        state.patchBodies.push(body)
+
+        if (state.failPatch) {
+          return jsonResponse({ error: { code: 'internal_error', message: '服务器开小差了' } }, 500)
+        }
+
+        const id = url.split('/').pop()
+        const target = state.posts.find((post) => post.id === id)
+        if (!target) {
+          return jsonResponse({ error: { code: 'not_found', message: '内容不存在' } }, 404)
+        }
+
+        target.favorited = body.favorited ?? target.favorited
+        target.favorites = target.favorited
+          ? target.favorites + 1
+          : Math.max(0, target.favorites - 1)
+        return jsonResponse({ post: { ...target } })
+      }
+
+      return jsonResponse({ error: { code: 'not_found', message: '接口不存在' } }, 404)
+    })
+
+    vi.stubGlobal('fetch', fetchImpl)
+    return state
+  }
+
+  it('点击收藏后计数加一并提示，再点一次取消', async () => {
+    const backend = stubFavoriteBackend([makePost({ id: 'p1', favorites: 0, favorited: false })])
+    const wrapper = await mountApp()
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="post-favorite"]').attributes('aria-pressed')).toBe('false')
+
+    await wrapper.get('[data-testid="post-favorite"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('1')
+    expect(wrapper.get('[data-testid="post-favorite"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="toast"]').text()).toBe('已收藏')
+    expect(backend.patchBodies).toEqual([{ favorited: true }])
+    expect(backend.posts[0]).toMatchObject({ favorites: 1, favorited: true })
+
+    await wrapper.get('[data-testid="post-favorite"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="post-favorite"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.get('[data-testid="toast"]').text()).toBe('已取消收藏')
+    expect(backend.patchBodies).toEqual([{ favorited: true }, { favorited: false }])
+  })
+
+  it('收藏失败时提示错误且界面状态回滚', async () => {
+    const backend = stubFavoriteBackend([makePost({ id: 'p1', favorites: 0, favorited: false })])
+    backend.failPatch = true
+
+    const wrapper = await mountApp()
+
+    await wrapper.get('[data-testid="post-favorite"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="post-favorite"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.get('[data-testid="toast"]').text()).toContain('服务器开小差了')
+    expect(backend.posts[0]).toMatchObject({ favorites: 0, favorited: false })
+  })
+})
+
 describe('昵称修改', () => {
   it('改名后顶部与历史内容作者同步更新，并以后端为准', async () => {
     const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })

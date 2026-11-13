@@ -262,6 +262,72 @@ describe('toggleLike', () => {
   })
 })
 
+describe('toggleFavorite', () => {
+  it('以取反后的状态发起 PATCH，并用服务端结果替换本地项', async () => {
+    const calls = stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', favorites: 1, favorited: false })] })
+        : json({ post: makePost({ id: 'p1', favorites: 2, favorited: true }) }),
+    )
+
+    const store = usePostsStore()
+    await store.load()
+
+    await expect(store.toggleFavorite('p1')).resolves.toBe(true)
+
+    expect(store.posts[0]).toMatchObject({ favorites: 2, favorited: true })
+    expect(store.error).toBeNull()
+
+    const patchCall = calls[1]!
+    expect(patchCall.url).toBe('/api/posts/p1')
+    expect(patchCall.init.method).toBe('PATCH')
+    expect(bodyOf(patchCall)).toEqual({ favorited: true })
+  })
+
+  it('已收藏时再次点击取消收藏', async () => {
+    const calls = stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', favorites: 3, favorited: true })] })
+        : json({ post: makePost({ id: 'p1', favorites: 2, favorited: false }) }),
+    )
+
+    const store = usePostsStore()
+    await store.load()
+
+    await expect(store.toggleFavorite('p1')).resolves.toBe(true)
+
+    expect(store.posts[0]).toMatchObject({ favorites: 2, favorited: false })
+    expect(bodyOf(calls[1]!)).toEqual({ favorited: false })
+  })
+
+  it('请求失败时返回 false、保留原值并设置提示', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', favorites: 1, favorited: false })] })
+        : json({ error: { code: 'internal_error', message: '服务器开小差了' } }, 500),
+    )
+
+    const store = usePostsStore()
+    await store.load()
+
+    await expect(store.toggleFavorite('p1')).resolves.toBe(false)
+
+    expect(store.posts[0]).toMatchObject({ favorites: 1, favorited: false })
+    expect(store.error).toBe('服务器开小差了')
+    expect(store.loading).toBe(false)
+  })
+
+  it('未知 id 不发请求直接返回 false', async () => {
+    const calls = stubFetch(() => json({ posts: [makePost({ id: 'p1' })] }))
+
+    const store = usePostsStore()
+    await store.load()
+
+    await expect(store.toggleFavorite('missing')).resolves.toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+})
+
 describe('remove', () => {
   it('删除成功后从列表移除', async () => {
     const calls = stubFetch((call) =>
