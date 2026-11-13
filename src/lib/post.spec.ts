@@ -1,28 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import {
-  MAX_CONTENT_LENGTH,
-  analyzeContent,
-  createPost,
-  normalizePost,
-  parseStoredPosts,
-  serializePosts,
-  type Post,
-} from './post'
+import { MAX_CONTENT_LENGTH, analyzeContent, createPost } from './post'
 import { DEFAULT_USER_NAME, MAX_NAME_LENGTH } from './profile'
 
 const NOW = new Date(2026, 10, 13, 9, 5, 0).getTime()
-
-function makePost(overrides: Partial<Post> = {}): Post {
-  return {
-    id: 'p1',
-    author: '访客',
-    content: '此刻的想法',
-    likes: 0,
-    liked: false,
-    createdAt: NOW,
-    ...overrides,
-  }
-}
 
 describe('analyzeContent', () => {
   it('空内容不可发布且不计长度', () => {
@@ -115,90 +95,4 @@ describe('createPost', () => {
   })
 })
 
-describe('normalizePost', () => {
-  it('保留合法字段', () => {
-    const post = normalizePost(makePost({ likes: 3, liked: true }))
-    expect(post).toEqual(makePost({ likes: 3, liked: true }))
-  })
 
-  it('拒绝非对象与无内容记录', () => {
-    expect(normalizePost(null)).toBeNull()
-    expect(normalizePost('text')).toBeNull()
-    expect(normalizePost({ content: '   ' })).toBeNull()
-    expect(normalizePost({ content: 42 })).toBeNull()
-  })
-
-  it('拒绝异常超长的历史数据', () => {
-    expect(normalizePost({ content: '字'.repeat(MAX_CONTENT_LENGTH * 4 + 1) })).toBeNull()
-  })
-
-  it('补全缺省值并纠正非法字段', () => {
-    const post = normalizePost({ content: '只有内容' }, { now: NOW, makeId: () => 'generated' })
-
-    expect(post).toEqual({
-      id: 'generated',
-      author: DEFAULT_USER_NAME,
-      content: '只有内容',
-      likes: 0,
-      liked: false,
-      createdAt: NOW,
-    })
-  })
-
-  it('点赞数取整且不接受负数', () => {
-    expect(normalizePost({ content: 'a', likes: 2.7 })?.likes).toBe(2)
-    expect(normalizePost({ content: 'a', likes: -5 })?.likes).toBe(0)
-    expect(normalizePost({ content: 'a', likes: '3' })?.likes).toBe(0)
-  })
-
-  it('liked 只接受严格 true', () => {
-    expect(normalizePost({ content: 'a', liked: true })?.liked).toBe(true)
-    expect(normalizePost({ content: 'a', liked: 'true' })?.liked).toBe(false)
-    expect(normalizePost({ content: 'a', liked: 1 })?.liked).toBe(false)
-  })
-
-  it('作者超长时按字符截断', () => {
-    const post = normalizePost({ content: 'a', author: '名'.repeat(30) })
-    expect(Array.from(post?.author ?? '')).toHaveLength(MAX_NAME_LENGTH)
-  })
-})
-
-describe('parseStoredPosts', () => {
-  it('空数据视为空列表', () => {
-    expect(parseStoredPosts(null)).toEqual({ posts: [], status: 'empty' })
-    expect(parseStoredPosts('')).toEqual({ posts: [], status: 'empty' })
-  })
-
-  it('JSON 损坏时报告 corrupt 且不抛异常', () => {
-    expect(parseStoredPosts('{not json')).toEqual({ posts: [], status: 'corrupt' })
-  })
-
-  it('非数组报告 corrupt', () => {
-    expect(parseStoredPosts('{"a":1}')).toEqual({ posts: [], status: 'corrupt' })
-  })
-
-  it('过滤非法记录并按时间倒序', () => {
-    const raw = JSON.stringify([
-      { id: 'old', content: '旧', createdAt: NOW - 1000 },
-      { id: 'bad', content: '  ' },
-      { id: 'new', content: '新', createdAt: NOW },
-    ])
-
-    const result = parseStoredPosts(raw)
-    expect(result.status).toBe('ok')
-    expect(result.posts.map((post) => post.id)).toEqual(['new', 'old'])
-  })
-
-  it('全部记录非法时返回空列表但状态为 ok', () => {
-    const result = parseStoredPosts(JSON.stringify([{ content: '' }, null]))
-    expect(result).toEqual({ posts: [], status: 'ok' })
-  })
-})
-
-describe('serializePosts', () => {
-  it('序列化后可被 parseStoredPosts 还原', () => {
-    const posts = [makePost({ id: 'b', createdAt: NOW }), makePost({ id: 'a', createdAt: NOW - 1 })]
-    const parsed = parseStoredPosts(serializePosts(posts))
-    expect(parsed.posts).toEqual(posts)
-  })
-})

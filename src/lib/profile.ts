@@ -1,4 +1,4 @@
-import { clampText, countChars } from './text'
+import { countChars } from './text'
 
 export const DEFAULT_USER_NAME = '访客'
 export const MAX_NAME_LENGTH = 16
@@ -28,26 +28,4 @@ export function inspectName(raw: string | null | undefined): NameInspection {
   }
 
   return { name, isValid: true, error: null }
-}
-
-/** 读取本地昵称，数据损坏或非法时回退到默认昵称。 */
-export function parseStoredUser(raw: string | null): { name: string } {
-  if (!raw) return { name: DEFAULT_USER_NAME }
-
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return { name: DEFAULT_USER_NAME }
-
-    const value = (parsed as Record<string, unknown>).name
-    if (typeof value !== 'string') return { name: DEFAULT_USER_NAME }
-
-    const name = value.trim()
-    return { name: name ? clampText(name, MAX_NAME_LENGTH) : DEFAULT_USER_NAME }
-  } catch {
-    return { name: DEFAULT_USER_NAME }
-  }
-}
-
-export function serializeUser(name: string): string {
-  return JSON.stringify({ name: name.trim() })
 }

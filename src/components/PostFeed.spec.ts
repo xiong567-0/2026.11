@@ -43,6 +43,21 @@ describe('PostFeed', () => {
     expect(wrapper.text()).toContain('第二条')
   })
 
+  it('首次加载且没有内容时展示加载态而不是空状态', () => {
+    const wrapper = mount(PostFeed, { props: { posts: [], loading: true } })
+
+    expect(wrapper.get('[data-testid="feed-loading"]').text()).toBe('正在加载内容…')
+    expect(wrapper.find('[data-testid="feed-empty"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('还没有内容')
+  })
+
+  it('加载结束且仍没有内容时回到空状态', () => {
+    const wrapper = mount(PostFeed, { props: { posts: [], loading: false } })
+
+    expect(wrapper.find('[data-testid="feed-loading"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="feed-empty"]').text()).toContain('还没有内容')
+  })
+
   it('转发卡片的点赞与删除事件', async () => {
     const wrapper = mount(PostFeed, { props: { posts: [makePost({ id: 'p1' })] } })
     const card = wrapper.getComponent(PostCard)

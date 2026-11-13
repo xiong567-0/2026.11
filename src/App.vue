@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, shallowRef, watch } from 'vue'
+import { onMounted, shallowRef } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import AppToast from './components/AppToast.vue'
 import NicknameDialog from './components/NicknameDialog.vue'
 import PostComposer from './components/PostComposer.vue'
 import PostFeed from './components/PostFeed.vue'
-import { STORAGE_KEYS } from './lib/storage'
 import { usePostsStore } from './stores/posts'
 import { useToastStore } from './stores/toast'
 import { useUserStore } from './stores/user'
@@ -16,23 +15,39 @@ const toast = useToastStore()
 
 const nicknameOpen = shallowRef(false)
 
-// 页面装配层负责两个数据源的初始化与跨功能协调
-const loadResult = posts.load()
-user.load()
+/**
+ * 装配层只负责初始化与跨功能协调：数据以服务端为准。
+ * 初始化失败时只提示一条可读文案（列表失败优先，避免两条相同错误重复弹出）。
+ */
+onMounted(async () => {
+  const [postsLoaded, userLoaded] = await Promise.all([posts.load(), user.load()])
 
-if (!loadResult.storageAvailable) {
-  toast.notify('浏览器已禁用本地存储，本次内容不会保留')
-} else if (loadResult.status === 'corrupt') {
-  toast.notify('本地数据读取失败，已临时使用空列表')
+  if (!postsLoaded) {
+    toast.notify(posts.error ?? '内容加载失败，请确认后端服务已启动')
+    return
+  }
+
+  if (!userLoaded) toast.notify(user.error ?? '昵称加载失败')
+})
+
+async function publish(content: string): Promise<void> {
+  const created = await posts.add(content, user.name)
+  if (!created) toast.notify(posts.error ?? '发布失败，请重试')
 }
 
-function publish(content: string): void {
-  posts.add(content, user.name)
-}
-
-function deletePost(id: string): void {
+async function deletePost(id: string): Promise<void> {
   if (!window.confirm('确定删除这条内容吗？删除后无法恢复。')) return
-  if (posts.remove(id)) toast.notify('已删除')
+
+  if (await posts.remove(id)) {
+    toast.notify('已删除')
+    return
+  }
+
+  toast.notify(posts.error ?? '删除失败，请重试')
+}
+
+async function likePost(id: string): Promise<void> {
+  if (!(await posts.toggleLike(id))) toast.notify(posts.error ?? '点赞失败，请重试')
 }
 
 function openNickname(): void {
@@ -43,51 +58,26 @@ function closeNickname(): void {
   nicknameOpen.value = false
 }
 
-function rename(name: string): void {
+async function rename(name: string): Promise<void> {
   const previous = user.name
-  const result = user.rename(name)
+  const result = await user.rename(name)
 
   if (!result.ok) {
     toast.notify(result.error ?? '昵称保存失败')
     return
   }
 
-  const changed = result.name !== previous
-  if (changed) posts.renameAuthor(result.name)
-
   nicknameOpen.value = false
-  toast.notify(changed ? '昵称已更新' : '昵称未变化')
-}
 
-watch(
-  () => posts.writeFailed,
-  (failed) => {
-    if (failed) toast.notify('本地存储写入失败，内容可能无法保留')
-  },
-)
-
-watch(
-  () => user.writeFailed,
-  (failed) => {
-    if (failed) toast.notify('昵称保存失败，请检查浏览器存储权限')
-  },
-)
-
-function syncFromOtherTabs(event: StorageEvent): void {
-  if (event.key === STORAGE_KEYS.posts) {
-    posts.load()
-  } else if (event.key === STORAGE_KEYS.user) {
-    user.load()
+  if (result.name === previous) {
+    toast.notify('昵称未变化')
+    return
   }
+
+  // 服务端会同步改写全部历史内容的作者，这里重新拉取以保证前端与服务端一致
+  const synced = await posts.load()
+  toast.notify(synced ? '昵称已更新' : (posts.error ?? '内容同步失败，请刷新页面重试'))
 }
-
-onMounted(() => {
-  window.addEventListener('storage', syncFromOtherTabs)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('storage', syncFromOtherTabs)
-})
 </script>
 
 <template>
@@ -96,12 +86,21 @@ onUnmounted(() => {
   <AppHeader :user-name="user.name" @edit="openNickname" />
 
   <main class="shell">
-    <PostComposer :author-name="user.name" @publish="publish" />
-    <PostFeed :posts="posts.posts" @like="posts.toggleLike" @delete="deletePost" />
+    <PostComposer
+      :author-name="user.name"
+      :publishing="posts.loading"
+      @publish="publish"
+    />
+    <PostFeed
+      :posts="posts.posts"
+      :loading="posts.loading"
+      @like="likePost"
+      @delete="deletePost"
+    />
   </main>
 
   <footer class="app-footer">
-    <p>内容仅保存在本机浏览器 · 微语</p>
+    <p>内容保存在服务端内存中 · 微语</p>
   </footer>
 
   <NicknameDialog

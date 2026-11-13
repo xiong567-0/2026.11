@@ -1,95 +1,98 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import {
-  createPost,
-  parseStoredPosts,
-  serializePosts,
-  type Post,
-  type StoredPostsStatus,
-} from '../lib/post'
-import { STORAGE_KEYS, createStorageAdapter, resolveLocalStorage } from '../lib/storage'
+import { ApiError, api, isNotFound } from '../lib/api'
+import type { Post } from '../lib/post'
 
-export interface LoadPostsResult {
-  /** ok：读取到数据；empty：没有历史数据；corrupt：数据损坏（保留原始值不覆盖） */
-  status: StoredPostsStatus
-  storageAvailable: boolean
+/** 展示顺序： createdAt 倒序（服务端已排序，这里做一次防御性归一）。 */
+function sortByCreatedAtDesc(posts: readonly Post[]): Post[] {
+  return [...posts].sort((a, b) => b.createdAt - a.createdAt)
+}
+
+function messageOf(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback
 }
 
 /**
- * 内容集合：唯一数据源，所有写操作先改状态再尽力持久化。
- * 存储不可用时退化为纯内存运行，并通过 writeFailed 暴露写入失败。
+ * 内容集合：唯一的服务端数据镜像。
+ * 所有写操作都以服务端返回的数据为准；失败时不抛异常，只写 error 并返回失败值。
  */
 export const usePostsStore = defineStore('posts', () => {
-  const adapter = createStorageAdapter(resolveLocalStorage())
-  const storageAvailable = adapter.available
-
   const posts = ref<Post[]>([])
-  const writeFailed = ref(false)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
 
   const count = computed(() => posts.value.length)
 
-  function persist(): boolean {
-    const ok = adapter.write(STORAGE_KEYS.posts, serializePosts(posts.value))
-    writeFailed.value = !ok
-    return ok
-  }
-
-  function load(): LoadPostsResult {
-    const result = parseStoredPosts(adapter.read(STORAGE_KEYS.posts))
-    posts.value = result.posts
-    return { status: result.status, storageAvailable }
-  }
-
-  function add(content: string, author: string): Post | null {
-    const post = createPost({ content, author })
-    if (!post) return null
-
-    posts.value = [post, ...posts.value]
-    persist()
-    return post
-  }
-
-  function toggleLike(id: string): boolean {
-    const index = posts.value.findIndex((post) => post.id === id)
-    if (index === -1) return false
-
-    const post = posts.value[index]!
-    const liked = !post.liked
-    posts.value[index] = {
-      ...post,
-      liked,
-      likes: Math.max(0, post.likes + (liked ? 1 : -1)),
+  async function load(signal?: AbortSignal): Promise<boolean> {
+    loading.value = true
+    try {
+      posts.value = sortByCreatedAtDesc(await api.listPosts(signal))
+      error.value = null
+      return true
+    } catch (err) {
+      error.value = messageOf(err, '内容加载失败')
+      return false
+    } finally {
+      loading.value = false
     }
-    persist()
-    return true
   }
 
-  function remove(id: string): boolean {
-    const next = posts.value.filter((post) => post.id !== id)
-    if (next.length === posts.value.length) return false
-
-    posts.value = next
-    persist()
-    return true
+  /** 发布内容；id / createdAt / 作者归一化由服务端负责，这里只合并返回值。 */
+  async function add(content: string, author: string): Promise<Post | null> {
+    loading.value = true
+    try {
+      const created = await api.createPost({ content, author })
+      posts.value = sortByCreatedAtDesc([created, ...posts.value])
+      error.value = null
+      return created
+    } catch (err) {
+      error.value = messageOf(err, '发布失败')
+      return null
+    } finally {
+      loading.value = false
+    }
   }
 
-  /** 昵称修改后同步历史内容的作者名（与旧版本行为保持一致）。 */
-  function renameAuthor(name: string): void {
-    if (!posts.value.length) return
+  /** 点赞/取消点赞：先把目标状态发给服务端，成功后用返回值替换本地项。 */
+  async function toggleLike(id: string): Promise<boolean> {
+    const current = posts.value.find((post) => post.id === id)
+    if (!current) return false
 
-    posts.value = posts.value.map((post) => ({ ...post, author: name }))
-    persist()
+    loading.value = true
+    try {
+      const updated = await api.setLike(id, !current.liked)
+      posts.value = posts.value.map((post) => (post.id === id ? updated : post))
+      error.value = null
+      return true
+    } catch (err) {
+      error.value = messageOf(err, '点赞失败')
+      return false
+    } finally {
+      loading.value = false
+    }
   }
 
-  return {
-    posts,
-    count,
-    storageAvailable,
-    writeFailed,
-    load,
-    add,
-    toggleLike,
-    remove,
-    renameAuthor,
+  /** 删除内容；服务端返回 404 说明已被删除，视为成功。 */
+  async function remove(id: string): Promise<boolean> {
+    loading.value = true
+    try {
+      await api.deletePost(id)
+      posts.value = posts.value.filter((post) => post.id !== id)
+      error.value = null
+      return true
+    } catch (err) {
+      if (isNotFound(err)) {
+        posts.value = posts.value.filter((post) => post.id !== id)
+        error.value = null
+        return true
+      }
+
+      error.value = messageOf(err, '删除失败')
+      return false
+    } finally {
+      loading.value = false
+    }
   }
+
+  return { posts, count, loading, error, load, add, toggleLike, remove }
 })

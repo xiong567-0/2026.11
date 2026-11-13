@@ -3,7 +3,14 @@ import { computed, shallowRef, useTemplateRef, watch } from 'vue'
 import { MAX_CONTENT_LENGTH, analyzeContent } from '../lib/post'
 import { initialOf } from '../lib/text'
 
-const props = defineProps<{ authorName: string }>()
+const props = withDefaults(
+  defineProps<{
+    authorName: string
+    /** 发布请求进行中：禁用发布按钮，避免重复提交 */
+    publishing?: boolean
+  }>(),
+  { publishing: false },
+)
 
 const emit = defineEmits<{
   publish: [content: string]
@@ -98,7 +105,7 @@ function submit(): void {
             type="submit"
             class="btn btn-primary"
             data-testid="publish-button"
-            :disabled="!analysis.canPublish"
+            :disabled="!analysis.canPublish || publishing"
           >
             <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
               <path

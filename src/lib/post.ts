@@ -4,8 +4,6 @@ import { clampText, countChars } from './text'
 export const MAX_CONTENT_LENGTH = 200
 /** 剩余 20 字时开始提醒 */
 export const NEAR_LIMIT_THRESHOLD = 20
-/** 历史数据允许的异常上限（正常输入不会超过 MAX_CONTENT_LENGTH） */
-const MAX_STORED_CONTENT_LENGTH = MAX_CONTENT_LENGTH * 4
 
 export interface Post {
   id: string
@@ -79,75 +77,3 @@ export function createPost({
   }
 }
 
-export interface NormalizePostOptions {
-  now?: number
-  makeId?: () => string
-}
-
-/** 修复单条历史数据；无法修复时返回 null（跳过该条）。 */
-export function normalizePost(
-  raw: unknown,
-  options: NormalizePostOptions = {},
-): Post | null {
-  if (!raw || typeof raw !== 'object') return null
-
-  const record = raw as Record<string, unknown>
-  const content = typeof record.content === 'string' ? record.content : ''
-  if (!content.trim()) return null
-  if (countChars(content) > MAX_STORED_CONTENT_LENGTH) return null
-
-  const now = options.now ?? Date.now()
-  const makeId = options.makeId ?? createPostId
-  const author = typeof record.author === 'string' ? record.author.trim() : ''
-  const rawLikes = record.likes
-  const likes =
-    typeof rawLikes === 'number' && Number.isFinite(rawLikes) && rawLikes > 0
-      ? Math.floor(rawLikes)
-      : 0
-  const rawCreatedAt = record.createdAt
-
-  return {
-    id: typeof record.id === 'string' && record.id ? record.id : makeId(),
-    author: author ? clampText(author, MAX_NAME_LENGTH) : DEFAULT_USER_NAME,
-    content,
-    likes,
-    liked: record.liked === true,
-    createdAt:
-      typeof rawCreatedAt === 'number' && Number.isFinite(rawCreatedAt)
-        ? rawCreatedAt
-        : now,
-  }
-}
-
-export type StoredPostsStatus = 'ok' | 'empty' | 'corrupt'
-
-export interface StoredPostsResult {
-  posts: Post[]
-  status: StoredPostsStatus
-}
-
-/** 解析本地存储中的内容列表：过滤非法记录、按创建时间倒序。 */
-export function parseStoredPosts(raw: string | null): StoredPostsResult {
-  if (!raw) return { posts: [], status: 'empty' }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return { posts: [], status: 'corrupt' }
-  }
-
-  if (!Array.isArray(parsed)) return { posts: [], status: 'corrupt' }
-
-  const now = Date.now()
-  const posts = parsed
-    .map((item) => normalizePost(item, { now }))
-    .filter((post): post is Post => post !== null)
-    .sort((a, b) => b.createdAt - a.createdAt)
-
-  return { posts, status: 'ok' }
-}
-
-export function serializePosts(posts: readonly Post[]): string {
-  return JSON.stringify(posts)
-}

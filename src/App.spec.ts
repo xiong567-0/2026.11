@@ -1,11 +1,11 @@
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
-import { serializePosts, type Post } from './lib/post'
-import { STORAGE_KEYS } from './lib/storage'
+import type { Post } from './lib/post'
+import { installFakeApi } from './test-utils/fakeApi'
 
-const NOW = new Date(2026, 10, 13, 9, 5, 0).getTime()
+const MINUTE = 60 * 1000
 
 let wrappers: VueWrapper[] = []
 
@@ -16,28 +16,25 @@ function makePost(overrides: Partial<Post> = {}): Post {
     content: '历史内容',
     likes: 0,
     liked: false,
-    createdAt: NOW,
+    createdAt: Date.now() - 2 * MINUTE,
     ...overrides,
   }
 }
 
-function mountApp() {
+/** 挂载并等待初始化请求（posts.load + user.load）落地 */
+async function mountApp(): Promise<VueWrapper> {
   const wrapper = mount(App, { global: { plugins: [createPinia()] } })
   wrappers.push(wrapper)
+  await flushPromises()
   return wrapper
 }
 
-function seedPosts(posts: Post[]): void {
-  localStorage.setItem(STORAGE_KEYS.posts, serializePosts(posts))
+function rejectFetch(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.reject(new Error('backend down'))),
+  )
 }
-
-function readStoredPosts(): Post[] {
-  return JSON.parse(localStorage.getItem(STORAGE_KEYS.posts) ?? '[]') as Post[]
-}
-
-beforeEach(() => {
-  localStorage.clear()
-})
 
 afterEach(() => {
   wrappers.forEach((wrapper) => wrapper.unmount())
@@ -45,47 +42,84 @@ afterEach(() => {
   document.body.style.overflow = ''
 })
 
-describe('App 初始渲染', () => {
-  it('没有本地数据时展示空状态与默认昵称', () => {
-    const wrapper = mountApp()
+describe('App 初始加载', () => {
+  it('空后端时展示默认昵称、0 条与空状态', async () => {
+    installFakeApi({ name: '访客' })
+
+    const wrapper = await mountApp()
 
     expect(wrapper.get('[data-testid="user-name"]').text()).toBe('访客')
     expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('0 条')
     expect(wrapper.text()).toContain('还没有内容')
+    expect(wrapper.find('[data-testid="feed-loading"]').exists()).toBe(false)
   })
 
-  it('从本地存储恢复历史内容', () => {
-    seedPosts([makePost({ id: 'a', content: '恢复的内容' })])
+  it('后端已有历史内容时加载并展示作者与相对时间', async () => {
+    installFakeApi({
+      name: '张三',
+      posts: [
+        makePost({
+          id: 'a',
+          author: '张三',
+          content: '最早的内容',
+          createdAt: Date.now() - 30 * MINUTE,
+        }),
+        makePost({
+          id: 'b',
+          author: '张三',
+          content: '最近的内容',
+          createdAt: Date.now() - 2 * MINUTE,
+        }),
+      ],
+    })
 
-    const wrapper = mountApp()
+    const wrapper = await mountApp()
 
-    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
-    expect(wrapper.text()).toContain('恢复的内容')
+    expect(wrapper.get('[data-testid="user-name"]').text()).toBe('张三')
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('2 条')
+
+    const cards = wrapper.findAll('[data-testid="post"]')
+    expect(cards).toHaveLength(2)
+    // 服务端按 createdAt 倒序返回，最新的排在最前
+    expect(cards[0]!.get('[data-testid="post-content"]').text()).toBe('最近的内容')
+    expect(cards[0]!.get('[data-testid="post-author"]').text()).toBe('张三')
+    expect(cards[0]!.get('time').text()).toBe('2 分钟前')
+    expect(cards[1]!.get('time').text()).toBe('30 分钟前')
   })
 
-  it('本地数据损坏时提示并使用空列表', () => {
-    localStorage.setItem(STORAGE_KEYS.posts, '{broken')
+  it('加载失败时提示错误且页面仍可交互', async () => {
+    rejectFetch()
 
-    const wrapper = mountApp()
+    const wrapper = await mountApp()
 
+    const toast = wrapper.get('[data-testid="toast"]')
+    expect(toast.text()).toContain('网络请求失败')
+    expect(toast.classes()).toContain('is-visible')
     expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('0 条')
-    expect(wrapper.get('[data-testid="toast"]').text()).toBe('本地数据读取失败，已临时使用空列表')
-    expect(wrapper.get('[data-testid="toast"]').classes()).toContain('is-visible')
+    expect(wrapper.get('[data-testid="user-name"]').text()).toBe('访客')
+    // 页面不崩溃：发布框与发布按钮仍在
+    expect(wrapper.find('textarea').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="publish-button"]').exists()).toBe(true)
   })
 })
 
 describe('发布内容', () => {
-  it('发布后立即出现在信息流并写入本地存储', async () => {
-    const wrapper = mountApp()
+  it('发布后出现在信息流、清空输入并写入后端', async () => {
+    const store = installFakeApi({ name: '访客' })
+    const wrapper = await mountApp()
 
     await wrapper.get('textarea').setValue('  第一条想法  ')
     await wrapper.get('[data-testid="composer-form"]').trigger('submit')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
     expect(wrapper.get('[data-testid="post-content"]').text()).toBe('第一条想法')
     expect(wrapper.get('[data-testid="post-author"]').text()).toBe('访客')
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('')
-    expect(readStoredPosts()[0]).toMatchObject({
+
+    const stored = store.listPosts()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]).toMatchObject({
       author: '访客',
       content: '第一条想法',
       likes: 0,
@@ -93,106 +127,113 @@ describe('发布内容', () => {
     })
   })
 
-  it('发布按钮在空内容时不可用', () => {
-    const wrapper = mountApp()
+  it('发布失败时提示错误且列表不变', async () => {
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
-    expect(
-      (wrapper.get('[data-testid="publish-button"]').element as HTMLButtonElement).disabled,
-    ).toBe(true)
+    rejectFetch()
+
+    await wrapper.get('textarea').setValue('会失败的内容')
+    await wrapper.get('[data-testid="composer-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="toast"]').text()).toContain('网络请求失败')
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
+    expect(wrapper.text()).not.toContain('会失败的内容')
+    expect(store.listPosts().map((post) => post.content)).toEqual(['历史内容'])
   })
 })
 
 describe('点赞与删除', () => {
-  it('点赞后计数与状态写入本地存储', async () => {
-    seedPosts([makePost({ id: 'p1' })])
-    const wrapper = mountApp()
+  it('点赞写入后端，再点一次取消', async () => {
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="post-like"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="like-count"]').text()).toBe('1')
     expect(wrapper.get('[data-testid="post-like"]').attributes('aria-pressed')).toBe('true')
-    expect(readStoredPosts()[0]).toMatchObject({ likes: 1, liked: true })
+    expect(store.listPosts()[0]).toMatchObject({ likes: 1, liked: true })
+
+    await wrapper.get('[data-testid="post-like"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="like-count"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="post-like"]').attributes('aria-pressed')).toBe('false')
+    expect(store.listPosts()[0]).toMatchObject({ likes: 0, liked: false })
   })
 
   it('确认后删除内容并提示', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
-    seedPosts([makePost({ id: 'p1' })])
-    const wrapper = mountApp()
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="post-delete"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('0 条')
     expect(wrapper.text()).toContain('还没有内容')
     expect(wrapper.get('[data-testid="toast"]').text()).toBe('已删除')
-    expect(readStoredPosts()).toEqual([])
+    expect(store.listPosts()).toEqual([])
   })
 
   it('取消删除时保留内容', async () => {
     vi.stubGlobal('confirm', vi.fn(() => false))
-    seedPosts([makePost({ id: 'p1' })])
-    const wrapper = mountApp()
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="post-delete"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
-    expect(readStoredPosts()).toHaveLength(1)
+    expect(wrapper.text()).toContain('历史内容')
+    expect(store.listPosts()).toHaveLength(1)
   })
 })
 
 describe('昵称修改', () => {
-  it('修改昵称后顶部与历史内容作者同步更新', async () => {
-    seedPosts([makePost({ id: 'p1' })])
-    const wrapper = mountApp()
+  it('改名后顶部与历史内容作者同步更新，并以后端为准', async () => {
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="user-chip"]').trigger('click')
     await wrapper.get('[data-testid="nickname-input"]').setValue('李四')
     await wrapper.get('[data-testid="nickname-save"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="user-name"]').text()).toBe('李四')
     expect(wrapper.get('[data-testid="post-author"]').text()).toBe('李四')
     expect(wrapper.find('[data-testid="nickname-dialog"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="toast"]').text()).toBe('昵称已更新')
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.user) ?? '{}')).toEqual({
-      name: '李四',
-    })
-    expect(readStoredPosts()[0]?.author).toBe('李四')
+    expect(store.getProfileName()).toBe('李四')
+    expect(store.listPosts()[0]?.author).toBe('李四')
   })
 
   it('昵称未变化时提示且不改动历史内容', async () => {
-    seedPosts([makePost({ id: 'p1', author: '访客' })])
-    const wrapper = mountApp()
+    const store = installFakeApi({ name: '访客', posts: [makePost({ id: 'p1' })] })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="user-chip"]').trigger('click')
     await wrapper.get('[data-testid="nickname-input"]').setValue('访客')
     await wrapper.get('[data-testid="nickname-save"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.get('[data-testid="toast"]').text()).toBe('昵称未变化')
-    expect(readStoredPosts()[0]?.author).toBe('访客')
+    expect(wrapper.get('[data-testid="post-author"]').text()).toBe('访客')
+    expect(store.listPosts()[0]?.author).toBe('访客')
   })
 
   it('取消关闭弹窗且不修改昵称', async () => {
-    const wrapper = mountApp()
+    const store = installFakeApi({ name: '访客' })
+    const wrapper = await mountApp()
 
     await wrapper.get('[data-testid="user-chip"]').trigger('click')
     await wrapper.get('[data-testid="nickname-cancel"]').trigger('click')
+    await flushPromises()
 
     expect(wrapper.find('[data-testid="nickname-dialog"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="user-name"]').text()).toBe('访客')
-  })
-})
-
-describe('多标签页同步', () => {
-  it('收到其他标签页的存储变化后刷新列表', async () => {
-    seedPosts([makePost({ id: 'p1' })])
-    const wrapper = mountApp()
-
-    seedPosts([makePost({ id: 'p1' }), makePost({ id: 'p2', content: '另一标签页的新内容' })])
-    const event = new Event('storage') as StorageEvent
-    Object.defineProperty(event, 'key', { value: STORAGE_KEYS.posts })
-    window.dispatchEvent(event)
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('2 条')
-    expect(wrapper.text()).toContain('另一标签页的新内容')
+    expect(store.getProfileName()).toBe('访客')
   })
 })

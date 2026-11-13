@@ -112,6 +112,22 @@ describe('PostComposer', () => {
     expect(wrapper.emitted('publish')).toEqual([['快捷键发布']])
   })
 
+  it('发布中时禁用发布按钮', async () => {
+    const wrapper = mount(PostComposer, { props: { authorName: '张三', publishing: true } })
+
+    await wrapper.get('textarea').setValue('正在提交的内容')
+
+    expect(getPublishButton(wrapper).disabled).toBe(true)
+  })
+
+  it('未在发布中时按内容是否可用决定按钮状态', async () => {
+    const wrapper = mount(PostComposer, { props: { authorName: '张三', publishing: false } })
+
+    await wrapper.get('textarea').setValue('可以发布的内容')
+
+    expect(getPublishButton(wrapper).disabled).toBe(false)
+  })
+
   it('空内容提交时提示而不是发布', async () => {
     const wrapper = mountComposer()
 

@@ -4,7 +4,14 @@ import { useNow } from '../composables/useNow'
 import type { Post } from '../lib/post'
 import PostCard from './PostCard.vue'
 
-const props = defineProps<{ posts: Post[] }>()
+const props = withDefaults(
+  defineProps<{
+    posts: Post[]
+    /** 首次加载中：列表为空时展示加载态而不是空状态 */
+    loading?: boolean
+  }>(),
+  { loading: false },
+)
 
 const emit = defineEmits<{
   like: [id: string]
@@ -32,6 +39,11 @@ const countLabel = computed(() => `${props.posts.length} 条`)
         @delete="emit('delete', $event)"
       />
     </TransitionGroup>
+
+    <div v-else-if="loading" class="feed-loading" data-testid="feed-loading" role="status">
+      <span class="loading-dot" aria-hidden="true"></span>
+      <p class="loading-text">正在加载内容…</p>
+    </div>
 
     <div v-else class="feed-empty" data-testid="feed-empty">
       <svg class="empty-icon" viewBox="0 0 64 64" width="64" height="64" fill="none" aria-hidden="true">
@@ -87,6 +99,34 @@ const countLabel = computed(() => `${props.posts.length} 条`)
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.feed-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 52px 16px 60px;
+  color: var(--c-text-dim);
+}
+
+.loading-dot {
+  width: 22px;
+  height: 22px;
+  border: 2.4px solid var(--c-line);
+  border-top-color: var(--c-primary-soft);
+  border-radius: 50%;
+  animation: feed-spin 760ms linear infinite;
+}
+
+.loading-text {
+  font-size: 13px;
+}
+
+@keyframes feed-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .feed-empty {

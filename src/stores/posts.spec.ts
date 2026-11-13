@@ -1,8 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPost, serializePosts, type Post } from '../lib/post'
-import { STORAGE_KEYS } from '../lib/storage'
-import { createFakeStorage } from '../test-utils/fakeStorage'
+import type { Post } from '../lib/post'
 import { usePostsStore } from './posts'
 
 const NOW = new Date(2026, 10, 13, 9, 5, 0).getTime()
@@ -19,249 +17,296 @@ function makePost(overrides: Partial<Post> = {}): Post {
   }
 }
 
-function seed(posts: Post[]): void {
-  localStorage.setItem(STORAGE_KEYS.posts, serializePosts(posts))
+interface RecordedCall {
+  url: string
+  init: RequestInit
 }
 
-function readStoredPosts(): Post[] {
-  return JSON.parse(localStorage.getItem(STORAGE_KEYS.posts) ?? '[]') as Post[]
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+/** 用假 fetch 替换全局实现，并记录请求。 */
+function stubFetch(
+  respond: (call: RecordedCall) => Response | Promise<Response>,
+): RecordedCall[] {
+  const calls: RecordedCall[] = []
+
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call = { url: String(input), init: init ?? {} }
+    calls.push(call)
+    return respond(call)
+  }) as unknown as typeof fetch
+
+  vi.stubGlobal('fetch', fetchImpl)
+  return calls
+}
+
+function bodyOf(call: RecordedCall): unknown {
+  return JSON.parse(String(call.init.body))
 }
 
 beforeEach(() => {
-  localStorage.clear()
   setActivePinia(createPinia())
 })
 
-describe('初始化与读取', () => {
-  it('没有本地数据时是空列表', () => {
-    const store = usePostsStore()
-    expect(store.load()).toEqual({ status: 'empty', storageAvailable: true })
-    expect(store.posts).toEqual([])
-    expect(store.count).toBe(0)
-  })
-
-  it('从本地存储恢复内容并按时间倒序', () => {
-    seed([
-      makePost({ id: 'older', createdAt: NOW - 5000 }),
-      makePost({ id: 'newer', createdAt: NOW }),
-    ])
-
-    const store = usePostsStore()
-    store.load()
-
-    expect(store.posts.map((post) => post.id)).toEqual(['newer', 'older'])
-    expect(store.count).toBe(2)
-  })
-
-  it('本地数据损坏时返回 corrupt 且不覆盖原始数据', () => {
-    localStorage.setItem(STORAGE_KEYS.posts, '{broken json')
-
-    const store = usePostsStore()
-    const result = store.load()
-
-    expect(result.status).toBe('corrupt')
-    expect(store.posts).toEqual([])
-    expect(localStorage.getItem(STORAGE_KEYS.posts)).toBe('{broken json')
-  })
-
-  it('跳过非法记录但保留合法记录', () => {
-    localStorage.setItem(
-      STORAGE_KEYS.posts,
-      JSON.stringify([{ id: 'ok', content: '合法', createdAt: NOW }, { content: '   ' }, null]),
+describe('load', () => {
+  it('拉取列表并按 createdAt 倒序放入 state', async () => {
+    const calls = stubFetch(() =>
+      json({
+        posts: [makePost({ id: 'older', createdAt: NOW - 5000 }), makePost({ id: 'newer', createdAt: NOW })],
+      }),
     )
 
     const store = usePostsStore()
-    store.load()
 
-    expect(store.posts.map((post) => post.id)).toEqual(['ok'])
+    await expect(store.load()).resolves.toBe(true)
+
+    expect(calls[0]!.url).toBe('/api/posts')
+    expect(calls[0]!.init.method).toBe('GET')
+    expect(store.posts.map((post) => post.id)).toEqual(['newer', 'older'])
+    expect(store.count).toBe(2)
+    expect(store.error).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+
+  it('请求进行中 loading 为 true', async () => {
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    stubFetch(async () => {
+      await gate
+      return json({ posts: [] })
+    })
+
+    const store = usePostsStore()
+    const pending = store.load()
+
+    expect(store.loading).toBe(true)
+
+    release?.()
+    await pending
+
+    expect(store.loading).toBe(false)
+  })
+
+  it('服务端错误时返回 false 并保留可读提示', async () => {
+    stubFetch(() => json({ error: { code: 'internal_error', message: '服务器开小差了' } }, 500))
+
+    const store = usePostsStore()
+
+    await expect(store.load()).resolves.toBe(false)
+
+    expect(store.posts).toEqual([])
+    expect(store.error).toBe('服务器开小差了')
+    expect(store.loading).toBe(false)
+  })
+
+  it('网络异常时给出网络提示', async () => {
+    stubFetch(() => {
+      throw new TypeError('Failed to fetch')
+    })
+
+    const store = usePostsStore()
+    await store.load()
+
+    expect(store.error).toBe('网络请求失败，请检查后端服务是否已启动')
+  })
+
+  it('重新加载成功后清空上一次的错误', async () => {
+    let shouldFail = true
+    stubFetch(() =>
+      shouldFail
+        ? json({ error: { code: 'internal_error', message: '服务器开小差了' } }, 500)
+        : json({ posts: [makePost()] }),
+    )
+
+    const store = usePostsStore()
+    await store.load()
+    expect(store.error).not.toBeNull()
+
+    shouldFail = false
+    await expect(store.load()).resolves.toBe(true)
+
+    expect(store.error).toBeNull()
+    expect(store.count).toBe(1)
   })
 })
 
 describe('add', () => {
-  it('新内容排在最前并写入本地存储', () => {
-    seed([makePost({ id: 'old', createdAt: NOW - 1000 })])
-
-    const store = usePostsStore()
-    store.load()
-
-    const created = store.add('  第一条新内容  ', '张三')
-
-    expect(created).not.toBeNull()
-    expect(store.posts[0]).toMatchObject({
-      author: '张三',
-      content: '第一条新内容',
-      likes: 0,
-      liked: false,
+  it('提交内容并把服务端返回的 post 放在最前', async () => {
+    const calls = stubFetch((call) => {
+      if (call.init.method === 'GET') {
+        return json({ posts: [makePost({ id: 'old', createdAt: NOW - 1000 })] })
+      }
+      return json({ post: makePost({ id: 'new', content: '第一条新内容', author: '张三' }) }, 201)
     })
-    expect(store.posts.map((post) => post.id)).toEqual([created!.id, 'old'])
-    expect(readStoredPosts()[0]).toEqual(created)
+
+    const store = usePostsStore()
+    await store.load()
+
+    const created = await store.add('第一条新内容', '张三')
+
+    expect(created).toEqual(makePost({ id: 'new', content: '第一条新内容', author: '张三' }))
+    expect(store.posts.map((post) => post.id)).toEqual(['new', 'old'])
+    expect(store.count).toBe(2)
+    expect(store.error).toBeNull()
+
+    const postCall = calls[1]!
+    expect(postCall.url).toBe('/api/posts')
+    expect(postCall.init.method).toBe('POST')
+    expect(bodyOf(postCall)).toEqual({ content: '第一条新内容', author: '张三' })
   })
 
-  it('空内容被拒绝且不写入存储', () => {
-    const store = usePostsStore()
-    store.load()
+  it('服务端返回更早的内容时也保持倒序', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'newer', createdAt: NOW })] })
+        : json({ post: makePost({ id: 'older', createdAt: NOW - 1000 }) }, 201),
+    )
 
-    expect(store.add('   ', '张三')).toBeNull()
-    expect(store.posts).toEqual([])
-    expect(localStorage.getItem(STORAGE_KEYS.posts)).toBeNull()
+    const store = usePostsStore()
+    await store.load()
+    await store.add('较早的内容', '张三')
+
+    expect(store.posts.map((post) => post.id)).toEqual(['newer', 'older'])
   })
 
-  it('超出字数上限的内容被拒绝', () => {
+  it('400 invalid_content 时返回 null、设置提示且不改变列表', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost()] })
+        : json({ error: { code: 'invalid_content', message: '内容不能为空' } }, 400),
+    )
+
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    expect(store.add('字'.repeat(201), '张三')).toBeNull()
-    expect(store.count).toBe(0)
-  })
+    await expect(store.add('   ', '张三')).resolves.toBeNull()
 
-  it('作者为空时使用默认昵称', () => {
-    const store = usePostsStore()
-    store.load()
-
-    expect(store.add('内容', '  ')?.author).toBe('访客')
+    expect(store.error).toBe('内容不能为空')
+    expect(store.posts.map((post) => post.id)).toEqual(['p1'])
+    expect(store.count).toBe(1)
   })
 })
 
 describe('toggleLike', () => {
-  it('点赞后计数加一并持久化', () => {
-    seed([makePost({ id: 'p1', likes: 2, liked: false })])
+  it('以取反后的状态发起 PATCH，并用服务端结果替换本地项', async () => {
+    const calls = stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', likes: 2, liked: false })] })
+        : json({ post: makePost({ id: 'p1', likes: 3, liked: true }) }),
+    )
 
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    expect(store.toggleLike('p1')).toBe(true)
+    await expect(store.toggleLike('p1')).resolves.toBe(true)
+
     expect(store.posts[0]).toMatchObject({ likes: 3, liked: true })
-    expect(readStoredPosts()[0]).toMatchObject({ likes: 3, liked: true })
+    expect(store.error).toBeNull()
+
+    const patchCall = calls[1]!
+    expect(patchCall.url).toBe('/api/posts/p1')
+    expect(patchCall.init.method).toBe('PATCH')
+    expect(bodyOf(patchCall)).toEqual({ liked: true })
   })
 
-  it('再次点击取消点赞并回退计数', () => {
-    seed([makePost({ id: 'p1', likes: 1, liked: true })])
+  it('已点赞时再次点击取消点赞', async () => {
+    const calls = stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', likes: 3, liked: true })] })
+        : json({ post: makePost({ id: 'p1', likes: 2, liked: false }) }),
+    )
 
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    store.toggleLike('p1')
-    expect(store.posts[0]).toMatchObject({ likes: 0, liked: false })
-    expect(readStoredPosts()[0]).toMatchObject({ likes: 0, liked: false })
+    await expect(store.toggleLike('p1')).resolves.toBe(true)
+
+    expect(store.posts[0]).toMatchObject({ likes: 2, liked: false })
+    expect(bodyOf(calls[1]!)).toEqual({ liked: false })
   })
 
-  it('未知 id 时不产生变化', () => {
-    seed([makePost({ id: 'p1' })])
+  it('未知 id 不发请求直接返回 false', async () => {
+    const calls = stubFetch(() => json({ posts: [makePost({ id: 'p1' })] }))
 
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    expect(store.toggleLike('missing')).toBe(false)
-    expect(store.posts[0]).toMatchObject({ likes: 0, liked: false })
+    await expect(store.toggleLike('missing')).resolves.toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('请求失败时返回 false、保留原值并设置提示', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'p1', likes: 2, liked: false })] })
+        : json({ error: { code: 'not_found', message: '内容不存在' } }, 404),
+    )
+
+    const store = usePostsStore()
+    await store.load()
+
+    await expect(store.toggleLike('p1')).resolves.toBe(false)
+
+    expect(store.posts[0]).toMatchObject({ likes: 2, liked: false })
+    expect(store.error).toBe('内容不存在')
   })
 })
 
 describe('remove', () => {
-  it('按 id 删除并持久化', () => {
-    seed([makePost({ id: 'a', createdAt: NOW }), makePost({ id: 'b', createdAt: NOW - 1 })])
+  it('删除成功后从列表移除', async () => {
+    const calls = stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'a', createdAt: NOW }), makePost({ id: 'b', createdAt: NOW - 1 })] })
+        : new Response(null, { status: 204 }),
+    )
 
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    expect(store.remove('a')).toBe(true)
+    await expect(store.remove('a')).resolves.toBe(true)
+
     expect(store.posts.map((post) => post.id)).toEqual(['b'])
-    expect(readStoredPosts().map((post) => post.id)).toEqual(['b'])
+    expect(calls[1]!.url).toBe('/api/posts/a')
+    expect(calls[1]!.init.method).toBe('DELETE')
   })
 
-  it('删除不存在的 id 返回 false', () => {
-    const store = usePostsStore()
-    store.load()
-
-    expect(store.remove('missing')).toBe(false)
-  })
-})
-
-describe('renameAuthor', () => {
-  it('同步更新所有历史内容的作者名并持久化', () => {
-    seed([
-      makePost({ id: 'a', author: '访客', createdAt: NOW }),
-      makePost({ id: 'b', author: '访客', createdAt: NOW - 1 }),
-    ])
+  it('404 视为已删除，返回 true 并移除本地项', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'a' })] })
+        : json({ error: { code: 'not_found', message: '内容不存在' } }, 404),
+    )
 
     const store = usePostsStore()
-    store.load()
+    await store.load()
 
-    store.renameAuthor('李四')
+    await expect(store.remove('a')).resolves.toBe(true)
 
-    expect(store.posts.every((post) => post.author === '李四')).toBe(true)
-    expect(readStoredPosts().every((post) => post.author === '李四')).toBe(true)
+    expect(store.posts).toEqual([])
+    expect(store.error).toBeNull()
   })
 
-  it('没有内容时不写存储', () => {
-    const store = usePostsStore()
-    store.load()
-
-    store.renameAuthor('李四')
-    expect(localStorage.getItem(STORAGE_KEYS.posts)).toBeNull()
-  })
-})
-
-describe('存储异常', () => {
-  it('存储被禁用时仍可在内存中读写，并标记写入失败', () => {
-    const { storage, state } = createFakeStorage()
-    state.failWrites = true
-    vi.stubGlobal('localStorage', storage)
+  it('其他错误返回 false 并保留该内容', async () => {
+    stubFetch((call) =>
+      call.init.method === 'GET'
+        ? json({ posts: [makePost({ id: 'a' })] })
+        : json({ error: { code: 'internal_error', message: '服务器开小差了' } }, 500),
+    )
 
     const store = usePostsStore()
-    const result = store.load()
+    await store.load()
 
-    expect(result.storageAvailable).toBe(false)
-    expect(store.add('内存中的内容', '张三')).not.toBeNull()
-    expect(store.count).toBe(1)
-    expect(store.writeFailed).toBe(true)
-  })
+    await expect(store.remove('a')).resolves.toBe(false)
 
-  it('写入超限时保留内存数据并标记写入失败', () => {
-    const { storage, state } = createFakeStorage()
-    vi.stubGlobal('localStorage', storage)
-
-    const store = usePostsStore()
-    store.load()
-    state.failWrites = true
-
-    expect(store.add('写不进存储的内容', '张三')).not.toBeNull()
-    expect(store.count).toBe(1)
-    expect(store.writeFailed).toBe(true)
-  })
-
-  it('恢复正常写入后清除失败标记', () => {
-    const { storage, state } = createFakeStorage()
-    vi.stubGlobal('localStorage', storage)
-
-    const store = usePostsStore()
-    store.load()
-
-    state.failWrites = true
-    store.add('失败一次', '张三')
-    expect(store.writeFailed).toBe(true)
-
-    state.failWrites = false
-    store.add('第二次成功', '张三')
-    expect(store.writeFailed).toBe(false)
-
-    const saved = JSON.parse(storage.snapshot()[STORAGE_KEYS.posts] ?? '[]') as Post[]
-    expect(saved[0]?.content).toBe('第二次成功')
-  })
-})
-
-describe('与领域模型的配合', () => {
-  it('add 使用与 createPost 一致的规则', () => {
-    const store = usePostsStore()
-    store.load()
-
-    const fromStore = store.add('同一条内容', '张三')
-    const fromDomain = createPost({ content: '同一条内容', author: '张三' })
-
-    expect(fromStore).toMatchObject({
-      author: fromDomain?.author,
-      content: fromDomain?.content,
-      likes: 0,
-      liked: false,
-    })
+    expect(store.posts.map((post) => post.id)).toEqual(['a'])
+    expect(store.error).toBe('服务器开小差了')
   })
 })

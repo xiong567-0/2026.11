@@ -3,23 +3,32 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "微语 · Micro Posts —— 基于 Vue 3 + Pinia 的轻量短文本发布页，数据保存在浏览器 localStorage",
+  "description": "微语 · Micro Posts —— 基于 Vue 3 + Pinia 的轻量短文本发布页，数据保存在 Hono 服务端内存中",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
+    "server": "tsx server/index.ts",
+    "server:dev": "tsx watch server/index.ts",
+    "dev:all": "concurrently -n web,api -c cyan,green \"vite\" \"tsx watch server/index.ts\"",
+    "start": "tsx server/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.8",
+    "hono": "^4.13.18",
     "pinia": "^4.1.0",
     "vue": "^3.5.45"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
     "@vitejs/plugin-vue": "^6.0.11",
     "@vue/test-utils": "^2.5.1",
+    "concurrently": "^10.0.7",
     "happy-dom": "^21.0.4",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vite": "^8.3.8",
     "vitest": "^5.1.0",
