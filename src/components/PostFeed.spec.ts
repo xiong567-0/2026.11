@@ -65,10 +65,73 @@ describe('PostFeed', () => {
     const card = wrapper.getComponent(PostCard)
 
     await card.vm.$emit('like', 'p1')
+    await card.vm.$emit('favorite', 'p1')
     await card.vm.$emit('delete', 'p1')
 
     expect(wrapper.emitted('like')).toEqual([['p1']])
+    expect(wrapper.emitted('favorite')).toEqual([['p1']])
     expect(wrapper.emitted('delete')).toEqual([['p1']])
+  })
+})
+
+describe('PostFeed 收藏筛选', () => {
+  const posts = [
+    makePost({ id: 'a', content: '已收藏的内容', createdAt: NOW, favorited: true, favorites: 1 }),
+    makePost({ id: 'b', content: '未收藏的内容', createdAt: NOW - 1000 }),
+  ]
+
+  it('默认停在「全部」，展示全部内容与总数', () => {
+    const wrapper = mount(PostFeed, { props: { posts } })
+
+    expect(wrapper.get('[data-testid="feed-filter-all"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="feed-filter-favorites"]').attributes('aria-pressed')).toBe(
+      'false',
+    )
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('2 条')
+    expect(wrapper.findAllComponents(PostCard)).toHaveLength(2)
+  })
+
+  it('切到「收藏」只展示已收藏内容并更新计数', async () => {
+    const wrapper = mount(PostFeed, { props: { posts } })
+
+    await wrapper.get('[data-testid="feed-filter-favorites"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="feed-filter-favorites"]').attributes('aria-pressed')).toBe(
+      'true',
+    )
+    expect(wrapper.get('[data-testid="feed-filter-all"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
+    expect(wrapper.findAllComponents(PostCard)).toHaveLength(1)
+    expect(wrapper.text()).toContain('已收藏的内容')
+    expect(wrapper.text()).not.toContain('未收藏的内容')
+  })
+
+  it('收藏筛选无内容时展示收藏空态，切回「全部」恢复', async () => {
+    const wrapper = mount(PostFeed, { props: { posts: [makePost({ id: 'b' })] } })
+
+    await wrapper.get('[data-testid="feed-filter-favorites"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('0 条')
+    const empty = wrapper.get('[data-testid="feed-empty"]')
+    expect(empty.text()).toContain('还没有收藏的内容')
+    expect(empty.text()).toContain('点击卡片上的书签即可收藏')
+
+    await wrapper.get('[data-testid="feed-filter-all"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="feed-count"]').text()).toBe('1 条')
+    expect(wrapper.find('[data-testid="feed-empty"]').exists()).toBe(false)
+    expect(wrapper.findAllComponents(PostCard)).toHaveLength(1)
+  })
+
+  it('收藏筛选下的空态仍然让加载态优先', () => {
+    const wrapper = mount(PostFeed, { props: { posts: [makePost({ id: 'b' })], loading: true } })
+
+    wrapper.get('[data-testid="feed-filter-favorites"]').trigger('click')
+
+    return wrapper.vm.$nextTick().then(() => {
+      expect(wrapper.find('[data-testid="feed-loading"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="feed-empty"]').exists()).toBe(false)
+    })
   })
 })
 

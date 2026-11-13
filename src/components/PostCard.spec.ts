@@ -72,6 +72,34 @@ describe('PostCard', () => {
     expect(wrapper.emitted('like')).toEqual([['p1']])
   })
 
+  it('展示收藏数与未收藏状态', () => {
+    const wrapper = mountCard()
+    const button = wrapper.get('[data-testid="post-favorite"]')
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('1')
+    expect(button.attributes('aria-pressed')).toBe('false')
+    expect(button.attributes('aria-label')).toBe('收藏')
+    expect(button.classes()).not.toContain('is-favorited')
+  })
+
+  it('已收藏时展示选中态与取消收藏语义', () => {
+    const wrapper = mountCard(makePost({ favorited: true, favorites: 4 }))
+    const button = wrapper.get('[data-testid="post-favorite"]')
+
+    expect(wrapper.get('[data-testid="favorite-count"]').text()).toBe('4')
+    expect(button.attributes('aria-pressed')).toBe('true')
+    expect(button.attributes('aria-label')).toBe('取消收藏')
+    expect(button.classes()).toContain('is-favorited')
+  })
+
+  it('点击收藏时抛出内容 id', async () => {
+    const wrapper = mountCard()
+
+    await wrapper.get('[data-testid="post-favorite"]').trigger('click')
+
+    expect(wrapper.emitted('favorite')).toEqual([['p1']])
+  })
+
   it('点击删除时抛出内容 id', async () => {
     const wrapper = mountCard()
 
