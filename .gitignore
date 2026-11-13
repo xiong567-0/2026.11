@@ -95,3 +95,6 @@ cmake-build-*/
 .codebuddy/
 .agents/
 skills-lock.json
+
+# ===== Git Worktree =====
+.worktrees/

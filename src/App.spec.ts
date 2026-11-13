@@ -16,6 +16,8 @@ function makePost(overrides: Partial<Post> = {}): Post {
     content: '历史内容',
     likes: 0,
     liked: false,
+    favorites: 0,
+    favorited: false,
     createdAt: Date.now() - 2 * MINUTE,
     ...overrides,
   }

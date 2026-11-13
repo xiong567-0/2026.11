@@ -24,6 +24,7 @@ export interface ApiClient {
   listPosts(signal?: AbortSignal): Promise<Post[]>
   createPost(input: { content: string; author?: string }, signal?: AbortSignal): Promise<Post>
   setLike(id: string, liked: boolean, signal?: AbortSignal): Promise<Post>
+  setFavorite(id: string, favorited: boolean, signal?: AbortSignal): Promise<Post>
   deletePost(id: string, signal?: AbortSignal): Promise<void>
   getProfile(signal?: AbortSignal): Promise<string>
   setProfile(name: string, signal?: AbortSignal): Promise<string>
@@ -159,6 +160,15 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         'PATCH',
         `/api/posts/${encodeURIComponent(id)}`,
         { body: { liked }, signal },
+      )
+      return data.post
+    },
+
+    async setFavorite(id, favorited, signal) {
+      const data = await request<{ post: Post }>(
+        'PATCH',
+        `/api/posts/${encodeURIComponent(id)}`,
+        { body: { favorited }, signal },
       )
       return data.post
     },

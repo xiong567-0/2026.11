@@ -65,6 +65,8 @@ describe('createPost', () => {
       content: '你好，微语',
       likes: 0,
       liked: false,
+      favorites: 0,
+      favorited: false,
       createdAt: NOW,
     })
   })

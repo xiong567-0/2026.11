@@ -11,6 +11,10 @@ export interface Post {
   content: string
   likes: number
   liked: boolean
+  /** 收藏数 */
+  favorites: number
+  /** 当前是否已收藏 */
+  favorited: boolean
   createdAt: number
 }
 
@@ -73,6 +77,8 @@ export function createPost({
     content: content.trim(),
     likes: 0,
     liked: false,
+    favorites: 0,
+    favorited: false,
     createdAt: now,
   }
 }

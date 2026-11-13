@@ -11,6 +11,8 @@ function makePost(overrides: Partial<Post> = {}): Post {
     content: '此刻的想法',
     likes: 0,
     liked: false,
+    favorites: 0,
+    favorited: false,
     createdAt: NOW,
     ...overrides,
   }
